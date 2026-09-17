@@ -1,8 +1,8 @@
 ---
 name: aws-security
-description: "Covers AWS security services and workflows — Security Hub V2 (OCSF) findings, connectors, aggregators, automation rules, and security posture summaries; Security Hub CSPM (V1/ASFF) controls and compliance standards; GuardDuty threat findings; Inspector vulnerability findings; Macie sensitive data findings; Detective investigation; and Security Lake configuration and data aggregation. Applicable when questions involve security posture, Exposure findings, CSPM failed controls, threat findings, vulnerability findings, sensitive data findings, automation rules, or cross-service security configuration across AWS environments. Procedures use standard AWS CLI syntax and work with or without the AWS MCP server."
+description: "Covers AWS security services and workflows — Security Hub V2 (OCSF) findings, connectors, aggregators, automation rules, and security posture summaries; Security Hub CSPM (V1/ASFF) controls and compliance standards; GuardDuty threat findings; Inspector vulnerability findings; Macie sensitive data findings; Detective investigation; Security Lake configuration and data aggregation; and evidence-based diagnosis and setup-readiness assessment of a specific Security Hub V2 third-party connector. Applicable when questions involve security posture, Exposure findings, CSPM failed controls, threat findings, vulnerability findings, sensitive data findings, automation rules, why one connector is unhealthy or whether a proposed connector configuration would work, or cross-service security configuration across AWS environments. Procedures use standard AWS CLI syntax and work with or without the AWS MCP server."
 metadata:
-  version: "1"
+  version: "2"
 ---
 
 # AWS Security
@@ -12,6 +12,17 @@ metadata:
 AWS Security services provide threat detection (GuardDuty), vulnerability management (Inspector), unified security dashboard and exposure analysis (Security Hub), compliance posture management (Security Hub CSPM), sensitive data discovery (Macie), investigation (Detective), and centralized log storage (Security Lake). Each service has dedicated reference procedures for configuration review and findings/investigation summarization.
 
 This skill works with or without the AWS MCP server. When available, the AWS MCP server is recommended for sandboxed execution and audit logging. Procedures use standard AWS CLI syntax (`aws <service> <command>`).
+
+## Guardrail — where this skill's own files live (MCP vs local install)
+
+This skill can be loaded two ways, and they resolve the skill's **own bundled files** — the `references/` documents and `scripts/` files — from different places. Determine how the skill was loaded before reading a reference or running a script:
+
+- **Loaded through the AWS MCP `retrieve_skill` tool call.** The skill is **not installed on the local filesystem**; its reference files and scripts do not exist on disk. You MUST fetch each reference or script through the same `retrieve_skill` tool by passing the `file` parameter (for example, `file="references/connector-diagnostics.md"` or `file="scripts/connector-diagnostics.mjs"`), and run a script from the content that tool returns. Do NOT `file_read` these paths from the local or working directory, and do NOT search the filesystem for them — they are not there, and any local file that happens to match the name is unrelated to this skill.
+- **Installed locally** (the skill lives in a local skills directory such as `.claude/skills/aws-security/`, `~/.claude/skills/aws-security/`, or `.kiro/skills/aws-security/`). Read references and run scripts from the local skill directory using the relative paths shown throughout this documentation.
+
+This distinction applies **only** to the skill's own bundled files. Every artifact created during a session or supplied by users is read from and written to the user's working directory regardless of how the skill was loaded. Never fetch or write user data through `retrieve_skill`.
+
+Connector Diagnostics files are directly available as the [workflow reference](references/connector-diagnostics.md), [collector script](scripts/connector-diagnostics.mjs), and [build-verification record](references/connector-diagnostics-build.md). The [expanded file-resolution guardrail](references/file-resolution-guardrail.md) repeats the user-data boundary and examples.
 
 See `references/services-overview.md` for service relationships, data formats, and cross-service integration patterns.
 
@@ -35,6 +46,16 @@ See `references/services-overview.md` for service relationships, data formats, a
 
 9. **Sensitive data disclosure.** When a procedure produces output that may contain sensitive information (full finding bodies, IP addresses, resource identifiers, network configurations, threat intelligence details), present a summary first. Note what sensitive data the full output contains. Display the complete raw response only when the caller explicitly requests it.
 
+10. **Connector Diagnostics answer contract.** After routing to `connector-diagnostics`, read its **Required answer semantics** section and preserve its exact field names and meanings. For a conceptual question, answer the question directly; do **not** add script paths, bundled-file names, shell commands, or non-agentic fallback instructions unless the user explicitly asks how to execute the fallback.
+    - If asked where the capability lives, include this exact sentence as its own paragraph, without modifying or splitting it: **Security Hub Connector Diagnostics workflow available through your supported AWS agent or MCP experience.** Do not name this skill or bind the answer to one delivery surface.
+    - State that diagnosis and readiness share the same **versioned diagnostic result contract**; finding statuses are `PASSED`, `FAILED`, `PENDING`, and `UNKNOWN`; diagnosis-only `resolution.outcome: RESOLVED` means connector selection succeeded and is neither a check status nor a health verdict.
+    - If the Azure CLI session is missing, state `awsOnly: true` when Azure did not run or returned only `UNAVAILABLE`, and `awsOnly: false` when Azure was reached but denied. Keep AWS conclusions. Capability-agnostic checks use `EVIDENCE_UNAVAILABLE` or `EVIDENCE_DENIED`. In **both** scenarios, keep `AZ_RECORDING_SUB_MISSING` and `AZ_DEFENDER_EXPORT_BROKEN` explicit with `CAPABILITY_UNKNOWN`: the GetConnectorV2 adapter does not report service-linked capability/lifecycle metadata, which does **not** mean the customer disabled a feature. Capability applicability takes precedence over availability or denial for those gated checks.
+    - A structurally plausible Region such as `us-eats-1` passes structural validation but is not proven supported; never rewrite it. Explicitly advise the customer to independently verify the intended Region before relying on the result, and surface runtime access failures as unverified/error evidence.
+    - Tenant-wide readiness is unsupported; require 1–10 explicit unique Azure subscription UUIDs.
+    - For production use, state that the workflow is read-only and recommend temporary, least-privilege read access restricted to `securityhub:ListConnectorsV2` and `securityhub:GetConnectorV2`; never claim it mutates, repairs, or re-authenticates.
+    - State that raw CLI errors and provider payloads are discarded or redacted at the collector boundary, including secrets, credentials, tokens, and connection strings; return only actionable non-sensitive fields and closed categories, never raw secret material.
+    - Treat diagnostic results as sensitive infrastructure metadata: they may contain AWS account IDs, Azure tenant and subscription IDs, connector ARNs, resource identifiers, and health state. Summarize first; do not log them to unencrypted systems or share them through insecure channels.
+
 ## How this skill works
 
 1. **Find the sub-skill** — Match the user's request against the sub-skill registry below. Match on meaning, not exact wording. If ambiguous, ask: "Are you checking configuration, or do you need a findings summary?"
@@ -55,6 +76,7 @@ See `references/services-overview.md` for service relationships, data formats, a
 | `inspector-findings` | Inspector Findings Summary | "vulnerabilities found", "Inspector findings", "CVE summary", "vulnerability posture" | User wants vulnerability overview | `references/inspector-findings.md` |
 | `security-hub-configuration` | Security Hub Config Review | "Security Hub integrations", "aggregation configured", "connectors", "automation rules", "V2 automation rules", "OCSF automation rules" | User wants to verify Security Hub V2 (OCSF) setup | `references/security-hub-configuration.md` |
 | `security-hub-findings` | Security Hub Findings Summary | "risk overview", "exposure findings", "attack paths", "OCSF findings", "security posture trends" | User wants Security Hub V2 (OCSF) findings overview | `references/security-hub-findings.md` |
+| `connector-diagnostics` | Connector Diagnostics & Readiness | "why is my connector failing", "diagnose connector ID", "troubleshoot Azure connector", "is my connector set up correctly", "will this connector config work", "assess connector readiness" | User wants deep diagnosis or setup-readiness assessment of ONE specific Security Hub V2 connector — independent from any findings summary | `references/connector-diagnostics.md` |
 | `security-hub-cspm-configuration` | CSPM Config Review | "standards enabled", "controls", "FSBP", "CIS", "PCI-DSS", "NIST", "compliance setup", "AI security", "AI best practices", "CSPM automation rules", "ASFF automation rules" | User wants to verify compliance standards setup | `references/security-hub-cspm-configuration.md` |
 | `security-hub-cspm-findings` | CSPM Compliance Summary | "compliance posture", "failed controls", "pass rate", "ASFF findings", "third-party findings" | User wants compliance findings overview | `references/security-hub-cspm-findings.md` |
 | `macie-configuration` | Macie Config Review | "Macie configured", "data discovery setup", "classification jobs", "Macie enabled" | User wants to verify Macie deployment | `references/macie-configuration.md` |
@@ -72,6 +94,8 @@ See `references/services-overview.md` for service relationships, data formats, a
 | "automation rules" (ambiguous) | Both Security Hub and Security Hub CSPM have automation rules. If customer uses Security Hub V2 (OCSF), route to Security Hub config. If customer uses Security Hub CSPM (ASFF), route to CSPM config. Ask if unclear. |
 | "standards", "controls", "compliance", "FSBP", "CIS", "PCI", "NIST", "ASFF" | Security Hub CSPM skills |
 | "integrations", "risk score", "attack path", "OCSF", "exposure", "connectors" | Security Hub skills |
+| "diagnose connector", "why is my connector failing", "troubleshoot connector", "connector unhealthy", "assess connector readiness", "will this connector config work" (ONE specific connector) | Connector Diagnostics (`connector-diagnostics`) — deep diagnosis/readiness of a specific connector, independent from findings |
+| "list connectors", "check connectors", "are connectors configured", "connector status" (generic setup review) | Security Hub Config Review (`security-hub-configuration`) — NOT connector diagnostics |
 | "threat detection", "GuardDuty", "detector", "runtime monitoring", "attack sequence" | GuardDuty skills |
 | "vulnerability", "CVE", "Inspector", "scanning", "code vulnerability" | Inspector skills |
 | "sensitive data", "classification", "Macie", "PII", "data discovery" | Macie skills |
@@ -80,6 +104,8 @@ See `references/services-overview.md` for service relationships, data formats, a
 | "organization policies", "org policies", "policy type", "list-policies --filter" | Organization Policies (cross-service) |
 
 **Note:** If a customer is using Security Hub V2 (OCSF), they should use Security Hub automation rules (`list-automation-rules-v2`) and should NOT use Security Hub CSPM features for new rules, even though CSPM remains technically available.
+
+**Note:** Connector diagnosis/readiness is independent from connector *findings* and generic connector configuration review: diagnosis/readiness routes to `connector-diagnostics`, summarizing findings routes to `security-hub-findings`, and generic setup routes to `security-hub-configuration`. For Connector Diagnostics customer-facing naming, follow global rule 10 and `references/connector-diagnostics.md` **Required answer semantics**.
 
 ## Service reference
 
